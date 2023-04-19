@@ -13,4 +13,4 @@ This repository contains all data, code, code requirements, and presentation and
   
 * Report and presentation
   * customer_success_analysis_report.html is a reader-friendly version of our results
-  * customer_success_analysis_desk.pdf is a copy of the deck shaered during our presentation on April 13, 2023
+  * customer_success_analysis_desk.pdf is a copy of the deck shared during our presentation on April 13, 2023
