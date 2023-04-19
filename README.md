@@ -11,6 +11,6 @@ This repository contains all data, code, code requirements, and presentation and
   * customer_success_analysis_report.rmd contains all code used to execute analysis
   * requirements.txt file contains all R package requirements to execute code
   
- * Report and presentation
+* Report and presentation
   * customer_success_analysis_report.html is a reader-friendly version of our results
   * customer_success_analysis_desk.pdf is a copy of the deck shaered during our presentation on April 13, 2023
