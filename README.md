@@ -9,7 +9,6 @@ This repository contains all data, code, code requirements, and presentation and
   
 * R code
   * customer_success_analysis_report.rmd contains all code used to execute analysis
-  * requirements.txt file contains all R package requirements to execute code
   
 * Report and presentation
   * customer_success_analysis_report.html is a reader-friendly version of our results
