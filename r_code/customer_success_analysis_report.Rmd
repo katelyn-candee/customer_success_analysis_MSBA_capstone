@@ -1,0 +1,534 @@
+---
+title: "Swire Coca-Cola Customer Success Modelling"
+author: "Katelyn Candee"
+date: ''
+output:
+  html_document:
+    theme: yeti
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: true
+    fig_width: 15
+    fig_height: 10
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Business Problem Statement
+
+When bidding for new contracts with local restaurants to exclusively sell Coca-Cola, Swire Coca-Cola needs to make an informed decision about the profitability of that business. If Swire Coca-Cola offers a low price point to win a contract, and the restaurant does not last, Swire Coca-Cola loses a significant investment.
+
+Improving Swire Coca-Cola's ability to predict the success of a new restaurant in their market will increase the likelihood that their new accounts will be long-lasting and profitable.
+
+This is a predictive analytics project that will focus on Swire Coca-Cola's Utah-based direct-store-delivery customers in the "Eating & Drinking" segment. We will use regression techniques to produce two models to predict the longevity and 2-year sales volume of prospective restaurant businesses using historical customer and sales data provided by Swire Coca-Cola, as well as census data externally sourced by our project team. The output of the tqo models will be customer longevity in years and total 2-year sales volume measure by gross profit.
+
+The project will be considered a success if Swire Coca-Cola sees an increase in its number of profitable B2B relationships with restaurants from using our predictions to inform bidding.
+
+The deliverable for this project will be a visual presentation and a written report summarizing our exploratory data analysis, model selection, evaluation and deployment process, and recommendations for applying our results. The presentation slides, written report, and all project code files will be provided to Swire Coca-Cola in the form of a GitHub repository accompanied by documentation explaining the repository contents, access, and organization.
+
+This project will be completed by student team members Katelyn Candee, Li Xiang and Vicky Mao by April 13, with progress checkpoints overseen by University of Utah faculty advisor Jeremy Morris on or before the following dates:
+
+* Exploratory data analysis - February 19
+* Model selection, evaluation and deployment - March 19
+* Practice project presentation - April 9
+
+Project team members may be reach at:
+
+* Katelyn Candee - (203) 823-3129 - u1398566@utah.com
+* Li Xiang - (385) 335-4332 - u1328517@utah.edu
+* Vicky Mao - (801) 970-0482 - u113228@utah.edu
+* Jeremy Morris (Faculty Advisor) - (801) 573-3265 - jeremy.morris@utah.edu
+
+# Data pre-processing
+
+Below is a summary of data pre-processing steps executed before modelling:
+
+* Load customer data
+* Load sales data
+* Clean, trim and summarize sales data
+  * Extract only sum of dead net gross profit, maximum posting date by customer, and mode of beverage category, calorie category, pack type and pack size
+* Clean and trim customer data
+  * Clean zip codes and add state variable
+  * Filter to DSD and Eating & Drinking customers
+  * Add census data
+    * Total population
+    * Median household income
+    * Median gross rent
+    * Median monthly housing costs
+    * Selected monthly owner costs
+    * Average household size
+    * Aggregate number of vehicles used to commute to work
+    * Median year structure built
+    * Number of households without internet access
+  * Remove non-descriptive variables (i.e., variables that contain the same value for every observation)
+* Join customer data with sales data
+  * Calculate customer longevity by subtracting on-boarding date from maximum posting date
+  * Extract month from on-boarding date
+  * Remove on-boarding date and maximum posting date
+  
+First, we load and inspect the data for missing values and duplicate observations.
+  
+```{r Load raw data}
+# Load packages
+library(tidyverse)
+library(dplyr)
+
+# Set working directory
+setwd("~/MSBA/2023_Spring/capstone")
+
+# Import data sets
+customer <- read.csv("data/FSOP_Customer_Data_v2.0.csv", stringsAsFactors = FALSE)
+sales <- read.csv("data/FSOP_Sales_Data_v2.0.csv", stringsAsFactors = FALSE)
+
+# View structure and summary
+str(customer)
+summary(customer)
+str(sales)
+summary(sales)
+
+# Check for missing values
+sum(is.na(customer))
+sum(is.na(sales))
+
+# Check for duplicate rows and duplicate customer numbers in customer data
+sum(duplicated(customer))
+sum(duplicated(customer$CUSTOMER_NUMBER_BLINDED))
+
+# Check for duplicate rows and number of customers in sales data
+sum(duplicated(sales))
+n_distinct(sales$CUSTOMER_NUMBER_BLINDED)
+
+```
+
+From the sale data, we extract total sales and overall maximum posting date by customer. Maximum posting date will be used later to calculate customer longevity. We also extract the most common beverage category, calorie category, pack type and pack size by customer.
+
+```{r Clean and summarize sales data}
+# Convert date variables to dates
+sales$MIN_POSTING_DATE <- as.Date(sales$MIN_POSTING_DATE, format = "%m/%d/%Y")
+sales$MAX_POSTING_DATE <- as.Date(sales$MAX_POSTING_DATE, format = "%m/%d/%Y")
+
+# Convert remaining character type variables to factors
+sales <- sales %>%
+  mutate_if(is.character, as.factor)
+
+# Check min and max posting dates fall within last two years
+sales %>%
+  summarise(min = min(c(MIN_POSTING_DATE, MAX_POSTING_DATE)),
+            max = max(c(MIN_POSTING_DATE, MAX_POSTING_DATE)))
+
+# Define function to get mode of categorical variable
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+# Extract total sales and maximum max posting date by customer
+sales <- sales %>%
+  group_by(CUSTOMER_NUMBER_BLINDED) %>%
+  summarize(GROSS_PROFIT_DEAD_NET = sum(GROSS_PROFIT_DEAD_NET),
+            MAX_POSTING_DATE = max(MAX_POSTING_DATE),
+            BEV_CAT_DESC = getmode(BEV_CAT_DESC),
+            CALORIE_CAT_DESC = getmode(CALORIE_CAT_DESC),
+            PACK_TYPE_DESC = getmode(PACK_TYPE_DESC),
+            PACK_SIZE_SALES_UNIT_DESCRIPTION = getmode(PACK_SIZE_SALES_UNIT_DESCRIPTION))
+
+summary(sales)
+
+```
+
+We add state to the customer data set. This will be used to filter the data set to only Utah customers.
+
+```{r Clean customer zip codes and add state}
+library(zipcode)
+library(zipcodeR)
+
+# Clean zip codes
+customer$ADDRESS_ZIP_CODE <- clean.zipcodes(customer$ADDRESS_ZIP_CODE)
+
+# Obtain data frame of states by zip code
+zipcode_state <- zipcodeR::zip_code_db %>%
+  select(zipcode, state) %>%
+  rename(ADDRESS_ZIP_CODE = zipcode,
+         ADDRESS_STATE = state)
+
+# Merge states with customer data set and filter to only UT customers
+customer <- left_join(customer, zipcode_state, by = "ADDRESS_ZIP_CODE") %>%
+  filter(ADDRESS_STATE == "UT")
+
+# Check for missing state values after merge
+sum(is.na(customer$ADDRESS_STATE))
+
+# Convert all character type variables to factor type
+customer <- customer %>%
+  mutate_if(is.character, as.factor)
+
+```
+
+The focus of this analysis is Swire Coca-Cola's B2B restaurant segment, so we filter our sample to include only customers assigned the "Eating & Drinking" activity cluster and labelled as a "Direct Store Delivery (DSD)" business type.
+ 
+```{r Filter down customer data to Eating & Drinking and DSD}
+# Save filtered customer data set
+customer <- customer %>%
+  filter(CUSTOMER_ACTIVITY_CLUSTER_DESCRIPTION == "Eating & Drinking" &
+           BUSINESS_TYPE_EXTENSION_DESCRIPTION == "DSD")
+
+```
+
+We extract the following information by zip code from the 5-year American Community Survey (2017-2021) administered by the U.S. Census Bureau:
+
+* Total population
+* Median household income (in the last 12 months)
+* Median gross rent
+* Median monthly housing costs
+* Selected monthly owner costs
+* Average household size
+* Aggregate number of vehicles used to commute to work
+* Median year structure built
+* Number of households without internet access
+
+The American Community Survey is administered annually by the U.S Census Bureau and collects social, economic, demographic and housing cost characteristics by geography. The results are available in 1-year and 5-year estimates. We are using 5-year estimates because they are statistically more reliable in areas of low population, which is applicable to Utah and many of the areas in which Swire Coca-Cola's customers are located.
+
+```{r Extract Census data by county}
+library(tidycensus)
+# Store key for Census Bureau API 
+census_key <- readLines("census_key.txt", warn=FALSE)
+census_api_key(census_key)
+
+# # Look up all available variables in ACS5 Census data
+# census_var_all <- load_variables(2021, "acs5")
+# view(census_var_all)
+
+# Extract ACS5 Census data by zipcode
+census_data <- get_acs(geography = "zcta",
+                      variables = c("B01003_001", "B19019_001",
+                                    "B25064_001", "B25105_001",
+                                    "B25094_001", "B25010_001",
+                                    "B08015_001", "B25035_001",
+                                    "B28011_008"),
+                      year = 2021) %>%
+ select(GEOID, variable, estimate) %>%
+ mutate(variable = case_when(variable == "B01003_001" ~ "TOTAL_POP",
+                             variable == "B19019_001" ~ "MED_INCOME",
+                             variable == "B25064_001" ~ "MED_GROSS_RENT",
+                             variable == "B25105_001" ~ "MED_HOUSING_COST",
+                             variable == "B25094_001" ~ "MONTHLY_OWNER_COSTS",
+                             variable == "B25010_001" ~ "AVG_HOUSEHOLD_SIZE",
+                             variable == "B08015_001" ~ "AGG_NUM_VEHICLES",
+                             variable == "B25035_001" ~ "MED_YEAR_BUILT",
+                             variable == "B28011_008" ~ "NO_INTERNET")) %>%
+ spread(variable, estimate) %>%
+ rename(ADDRESS_ZIP_CODE = GEOID) %>%
+ mutate_if(is.character, as.factor)
+
+# Join census data with customer data
+customer <- left_join(customer, census_data,  
+                      by = "ADDRESS_ZIP_CODE") %>%
+  na.omit()   # Omit observations where census data is missing
+
+```
+
+We remove cold drink channel, market, business type and acitivty cluster variables because all observation share the same label. We also remove trade channel "2" because it is a duplicate of trade channel.
+
+```{r Remove non-descriptive and repeat variables from customer data}
+customer <- customer %>%
+  select(-COLD_DRINK_CHANNEL_DESCRIPTION,
+         -MARKET_DESCRIPTION,
+         -BUSINESS_TYPE_EXTENSION_DESCRIPTION,
+         -CUSTOMER_ACTIVITY_CLUSTER_DESCRIPTION,
+         -CUSTOMER_TRADE_CHANNEL_DESCRIPTION2,
+         -ADDRESS_STATE)
+
+```
+
+We join the customer data with the summarized sales data. 
+
+```{r Join sales and customer data}
+# Left-join customer data with summarized sales data
+customer_sales <- left_join(customer, sales, by = "CUSTOMER_NUMBER_BLINDED")
+
+# Check join did not introduce missing values
+sum(is.na(customer_sales))
+
+```
+
+We calculate customer longevity by subtracting on-boarding date from maximum posting date.
+
+```{r Calculate customer longevity}
+# Convert on-boarding date to date type and create new variable for customer
+# longevity calculated in years
+library(lubridate)
+customer_sales$CUSTOMER_LONGEVITY <- time_length(
+  difftime(customer_sales$MAX_POSTING_DATE, 
+           customer_sales$ON_BOARDING_DATE),
+  "years")
+
+# Inspect customer longevity calculation
+summary(customer_sales$CUSTOMER_LONGEVITY)
+
+# Extract on-boarding month from on-boarding date
+customer_sales <- customer_sales %>%
+  mutate(ON_BOARDING_MONTH = factor(month(ymd(ON_BOARDING_DATE)))) %>%
+  select(-ON_BOARDING_DATE, -MAX_POSTING_DATE)
+
+# View structure and summary of final customer sales set
+str(customer_sales)
+summary(customer_sales)
+sum(is.na(customer_sales))
+
+```
+
+# Modelling
+
+We fit three different model types to predict customer longevity and gross profit:
+
+* Multilayer perception regression
+* Support vector machine
+* k-nearest neighbors
+
+## Predicting customer gross profit
+
+Our target variable is total gross profit dead net over a 2-year period. We begin by selecting predictors from our customer sales data, then we split the data into train and test sets.
+
+```{r Select and split test and train data for preditcing profit}
+library(glmnet)
+library(RWeka)
+library(caret)
+library(kernlab)
+library(rminer)
+library(matrixStats)
+
+# Remove customer number and customer longevity from customer sales data, as well as any classification variables with 40+ classes
+profit <- customer_sales[, -c(1, 4:5, 10, 24, 25)]
+
+# Partition out 70% of dataset rows
+set.seed(123)
+inTrain_profit <- createDataPartition(profit$GROSS_PROFIT_DEAD_NET, p = 0.7, list = FALSE)
+
+# Assign rows indexed by inTrain to trainsets and rows indexed by -inTrain to test sets
+train_target_profit <- profit[inTrain_profit, 16]
+test_target_profit <- profit[-inTrain_profit, 16]
+train_input_profit <- profit[inTrain_profit, -16]
+test_input_profit <- profit[-inTrain_profit, -16]
+
+```
+
+First, we fit a penalized regression model and evaluate its performance.
+
+```{r LASSO penalized regression model for predicting profit}
+
+# Train LASSO model
+profit_lasso <- cv.glmnet(y = train_target_profit,
+                          x = data.matrix(train_input_profit),
+                          alpha=1,
+                          standardize = TRUE,
+                          nfolds = 3,
+                          type.measure = "mse")
+
+coef(profit_lasso, s="lambda.min", exact=FALSE)
+
+# Apply model to train and test data sets
+predicted_profit_lasso_train <- predict(profit_lasso, data.matrix(train_input_profit))
+predicted_profit_lasso_test  <- predict(profit_lasso, data.matrix(test_input_profit))
+
+# Evaluate and compare performance on train and test data sets
+mmetric(train_target_profit, predicted_profit_lasso_train,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+mmetric(test_target_profit, predicted_profit_lasso_test,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+
+
+  
+```
+
+Second, we fit a support vector machine model using default hyperparameters and evaluate its performance.
+
+```{r SVM model for predicting profit with default settings}
+
+# Train ksvm model with default settings
+set.seed(123)
+profit_ksvm <- ksvm(train_target_profit ~ ., data = train_input_profit)
+
+# Apply model to train and test data sets
+predicted_profit_ksvm_train <- predict(profit_ksvm, train_input_profit)
+predicted_profit_ksvm_test  <- predict(profit_ksvm, test_input_profit)
+
+# Evaluate and compare performance on train and test data sets
+mmetric(train_target_profit, predicted_profit_ksvm_train,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+mmetric(test_target_profit, predicted_profit_ksvm_test,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+
+```
+
+Third, we fit a k-nearest neighbors model and evaluate its performance.
+
+```{r KNN model for predicting profit with default settings}
+
+# Train IBk model with default settings
+profit_IBk <- IBk(train_target_profit ~ ., 
+                  data = train_input_profit,
+                  control = Weka_control(K = 42, I = TRUE))
+
+# Apply model to train and test data sets
+predicted_profit_IBk_train <- predict(profit_IBk, train_input_profit)
+predicted_profit_IBk_test <-  predict(profit_IBk, test_input_profit)
+
+# Evaluate and compare performance on train and test data sets
+mmetric(train_target_profit, predicted_profit_IBk_train,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+mmetric(test_target_profit, predicted_profit_IBk_test,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+
+
+```
+
+## Predicting customer longevity
+
+Our target variable is customer longevity (i.e., the difference between a customer's maximum posting date and on-boarding date). We begin by selecting predictors from our customer sales data, then we split the data into train and test sets.
+
+```{r Select and split test and train data for predicting longevity}
+
+# Trim data set to reduce number of predictors 
+longevity <- customer_sales[, -c(1, 4:5, 10, 20, 24)]
+
+# Partition out 70% of dataset rows
+set.seed(123)
+inTrain_longevity <- createDataPartition(longevity$CUSTOMER_LONGEVITY, p = 0.7, list = FALSE)
+
+# Assign rows indexed by inTrain to trainsets and rows indexed by -inTrain to test sets
+# Create two test and train sets - 1) target variable only and 2) all inputs minus target
+train_target_longevity <- longevity[inTrain_longevity, 19]
+test_target_longevity <- longevity[-inTrain_longevity, 19]
+train_input_longevity <- longevity[inTrain_longevity, -19]
+test_input_longevity <- longevity[-inTrain_longevity, -19]
+
+```
+
+First, we fit a penalized regression model and evaluate its performance.
+
+```{r LASSO penalized regression model for predicting longevity}
+
+# Train LASSO model
+longevity_lasso <- cv.glmnet(y = train_target_longevity,
+                             x = data.matrix(train_input_longevity),
+                             alpha=1,
+                             standardize = TRUE,
+                             nfolds = 15,
+                             type.measure = "mse")
+
+coef(profit_lasso, s="lambda.min", exact=FALSE)
+
+# Apply model to train and test data sets
+predicted_longevity_lasso_train <- predict(longevity_lasso, data.matrix(train_input_longevity))
+predicted_longevity_lasso_test  <- predict(longevity_lasso, data.matrix(test_input_longevity))
+
+# Evaluate and compare performance on train and test data sets
+mmetric(train_target_longevity, predicted_longevity_lasso_train,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+mmetric(test_target_longevity, predicted_longevity_lasso_test,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+  
+```
+
+Second, we fit a support vector machine model using default hyperparameters and evaluate its performance.
+
+```{r SVM model for predicting longevity with default settings}
+
+# Train ksvm model with default settings
+set.seed(123)
+longevity_ksvm <- ksvm(train_target_longevity ~ ., data = train_input_longevity)
+
+# Apply model to train and test data sets
+predicted_longevity_ksvm_train <- predict(longevity_ksvm, train_input_longevity)
+predicted_longevity_ksvm_test  <- predict(longevity_ksvm, test_input_longevity)
+
+# Evaluate and compare performance on train and test data sets
+mmetric(train_target_longevity, predicted_longevity_ksvm_train,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+mmetric(test_target_longevity, predicted_longevity_ksvm_test,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+
+```
+
+Third, we fit a k-nearest neighbors model using default hyperparameters and evaluate its performance.
+
+```{r KNN model for predicting longevity with default settings}
+
+# Train IBk model with default settings
+longevity_IBk <- IBk(train_target_longevity ~ ., data = train_input_longevity,
+                     control = Weka_control(K = 42, I = TRUE))
+
+# Apply model to train and test data sets
+predicted_longevity_IBk_train <- predict(longevity_IBk, train_input_longevity)
+predicted_longevity_IBk_test <-  predict(longevity_IBk, test_input_longevity)
+
+# Evaluate and compare performance on train and test data sets
+mmetric(train_target_longevity, predicted_longevity_IBk_train,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+mmetric(test_target_longevity, predicted_longevity_IBk_test,
+        c("R2", "MAE", "MAPE", "RAE", "RMSE", "RMSPE","RRSE"))
+
+```
+
+### Cross-validation
+
+The support vector regression method provided the best performance results, so we will use cross-validation to further evaluate our performance using different hyper paremeters.
+
+```{r Define cross validation function for ksvm}
+cv_function_ksvm <- function(df, target, nFolds, seedVal, metrics_list, kern, c)
+{
+# create folds using the assigned values
+
+set.seed(seedVal)
+folds = createFolds(df[,target],nFolds)
+
+# The lapply loop
+
+cv_results <- lapply(folds, function(x)
+{ 
+# data preparation:
+
+  test_target <- df[x,target]
+  test_input <- df[x,-target]
+  
+  train_target <- df[-x,target]
+  train_input <- df[-x,-target]
+   pred_model <- ksvm(train_target ~ .,data = train_input,kernel=kern,C=c)  
+  pred <- predict(pred_model, test_input)
+  return(mmetric(test_target,pred,metrics_list))
+})
+
+cv_results_m <- as.matrix(as.data.frame(cv_results))
+cv_mean<- as.matrix(rowMeans(cv_results_m))
+cv_sd <- as.matrix(rowSds(cv_results_m))
+colnames(cv_mean) <- "Mean"
+colnames(cv_sd) <- "Sd"
+kable(t(cbind(cv_mean,cv_sd)),digits=2)
+}
+
+```
+
+```{r Cross-validation of ksvm for profit using different parameters}
+df <- longevity
+target <- 19
+seedVal <- 123
+metrics_list <- c("MAE","RMSE","MAPE","RMSPE","RAE","RRSE","R2")
+
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'rbfdot', 1)
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'laplacedot', 1)
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'rbfdot', 5)
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'laplacedot', 5)
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'rbfdot', 10)
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'laplacedot', 10)
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'rbfdot', 20)
+cv_function_ksvm(df, target, 3, seedVal, metrics_list, 'laplacedot', 20)
+
+```
