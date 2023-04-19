@@ -3,9 +3,9 @@ This repository contains all data, code, code requirements, and presentation and
 
 ## Contents
 * Data
-  * FSOP_Customer provided by Swire Coca-Cola
-  * FSOP_Sales provided by Swire Coca-Cola
-  * American Community Survey (2017-2021) sourced from the U.S. Census Bureau
+  * FSOP customer data provided by Swire Coca-Cola (FSOP_Customer_Data_v2.0.csv)
+  * FSOP customer sales data provided by Swire Coca-Cola (FSOP_Sales_Data_v2.0.csv)
+  * American Community Survey (2017-2021) data sourced from the U.S. Census Bureau (Selected_ACS_2017_2021.csv) 
   
 * R code
   * customer_success_analysis_report.rmd contains all code used to execute analysis
